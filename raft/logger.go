@@ -41,6 +41,15 @@ type Logger interface {
 	Panicf(format string, v ...interface{})
 }
 
+// DebugLogger is an extension of Logger that exposes whether debug logging
+// is enabled or not. Implementing the interface allows debug logging to be
+// short-circuited earlier when debug logging is disabled, avoiding memory
+// allocation.
+type DebugLogger interface {
+	Logger
+	DebugEnabled() bool
+}
+
 func SetLogger(l Logger) { raftLogger = l }
 
 var (
@@ -65,6 +74,11 @@ func (l *DefaultLogger) EnableTimestamps() {
 
 func (l *DefaultLogger) EnableDebug() {
 	l.debug = true
+}
+
+// DebugEnabled implements the DebugLogger interface.
+func (l *DefaultLogger) DebugEnabled() bool {
+	return l.debug
 }
 
 func (l *DefaultLogger) Debug(v ...interface{}) {
@@ -123,4 +137,13 @@ func (l *DefaultLogger) Panicf(format string, v ...interface{}) {
 
 func header(lvl, msg string) string {
 	return fmt.Sprintf("%s: %s", lvl, msg)
+}
+
+// debugLoggingEnabled returns whether debug logging is enabled or whether
+// calling Logger.Debug/Logger.Debugf would be a pointless no-op.
+func debugLoggingEnabled(l Logger) bool {
+	if dl, ok := l.(DebugLogger); ok {
+		return dl.DebugEnabled()
+	}
+	return true
 }

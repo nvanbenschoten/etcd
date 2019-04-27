@@ -492,7 +492,9 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 
 	if errt != nil || erre != nil { // send snapshot if we failed to get term or entries
 		if !pr.RecentActive {
-			r.logger.Debugf("ignore sending snapshot to %x since it is not recently active", to)
+			if debugLoggingEnabled(r.logger) {
+				r.logger.Debugf("ignore sending snapshot to %x since it is not recently active", to)
+			}
 			return false
 		}
 
@@ -500,7 +502,9 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 		snapshot, err := r.raftLog.snapshot()
 		if err != nil {
 			if err == ErrSnapshotTemporarilyUnavailable {
-				r.logger.Debugf("%x failed to send snapshot to %x because snapshot is temporarily unavailable", r.id, to)
+				if debugLoggingEnabled(r.logger) {
+					r.logger.Debugf("%x failed to send snapshot to %x because snapshot is temporarily unavailable", r.id, to)
+				}
 				return false
 			}
 			panic(err) // TODO(bdarnell)
@@ -510,10 +514,14 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 		}
 		m.Snapshot = snapshot
 		sindex, sterm := snapshot.Metadata.Index, snapshot.Metadata.Term
-		r.logger.Debugf("%x [firstindex: %d, commit: %d] sent snapshot[index: %d, term: %d] to %x [%s]",
-			r.id, r.raftLog.firstIndex(), r.raftLog.committed, sindex, sterm, to, pr)
+		if debugLoggingEnabled(r.logger) {
+			r.logger.Debugf("%x [firstindex: %d, commit: %d] sent snapshot[index: %d, term: %d] to %x [%s]",
+				r.id, r.raftLog.firstIndex(), r.raftLog.committed, sindex, sterm, to, pr)
+		}
 		pr.becomeSnapshot(sindex)
-		r.logger.Debugf("%x paused sending replication messages to %x [%s]", r.id, to, pr)
+		if debugLoggingEnabled(r.logger) {
+			r.logger.Debugf("%x paused sending replication messages to %x [%s]", r.id, to, pr)
+		}
 	} else {
 		m.Type = pb.MsgApp
 		m.Index = pr.Next - 1
@@ -652,10 +660,12 @@ func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
 	}
 	// Track the size of this uncommitted proposal.
 	if !r.increaseUncommittedSize(es) {
-		r.logger.Debugf(
-			"%x appending new entries to log would exceed uncommitted entry size limit; dropping proposal",
-			r.id,
-		)
+		if debugLoggingEnabled(r.logger) {
+			r.logger.Debugf(
+				"%x appending new entries to log would exceed uncommitted entry size limit; dropping proposal",
+				r.id,
+			)
+		}
 		// Drop the proposal.
 		return false
 	}
@@ -926,7 +936,9 @@ func (r *raft) Step(m pb.Message) error {
 				r.campaign(campaignElection)
 			}
 		} else {
-			r.logger.Debugf("%x ignoring MsgHup because already leader", r.id)
+			if debugLoggingEnabled(r.logger) {
+				r.logger.Debugf("%x ignoring MsgHup because already leader", r.id)
+			}
 		}
 
 	case pb.MsgVote, pb.MsgPreVote:
@@ -1001,7 +1013,9 @@ func stepLeader(r *raft, m pb.Message) error {
 			return ErrProposalDropped
 		}
 		if r.leadTransferee != None {
-			r.logger.Debugf("%x [term %d] transfer leadership to %x is in progress; dropping proposal", r.id, r.Term, r.leadTransferee)
+			if debugLoggingEnabled(r.logger) {
+				r.logger.Debugf("%x [term %d] transfer leadership to %x is in progress; dropping proposal", r.id, r.Term, r.leadTransferee)
+			}
 			return ErrProposalDropped
 		}
 
@@ -1058,7 +1072,9 @@ func stepLeader(r *raft, m pb.Message) error {
 	// All other message types require a progress for m.From (pr).
 	pr := r.getProgress(m.From)
 	if pr == nil {
-		r.logger.Debugf("%x no progress available for %x", r.id, m.From)
+		if debugLoggingEnabled(r.logger) {
+			r.logger.Debugf("%x no progress available for %x", r.id, m.From)
+		}
 		return nil
 	}
 	switch m.Type {
@@ -1066,10 +1082,14 @@ func stepLeader(r *raft, m pb.Message) error {
 		pr.RecentActive = true
 
 		if m.Reject {
-			r.logger.Debugf("%x received msgApp rejection(lastindex: %d) from %x for index %d",
-				r.id, m.RejectHint, m.From, m.Index)
+			if debugLoggingEnabled(r.logger) {
+				r.logger.Debugf("%x received msgApp rejection(lastindex: %d) from %x for index %d",
+					r.id, m.RejectHint, m.From, m.Index)
+			}
 			if pr.maybeDecrTo(m.Index, m.RejectHint) {
-				r.logger.Debugf("%x decreased progress of %x to [%s]", r.id, m.From, pr)
+				if debugLoggingEnabled(r.logger) {
+					r.logger.Debugf("%x decreased progress of %x to [%s]", r.id, m.From, pr)
+				}
 				if pr.State == ProgressStateReplicate {
 					pr.becomeProbe()
 				}
@@ -1082,7 +1102,9 @@ func stepLeader(r *raft, m pb.Message) error {
 				case pr.State == ProgressStateProbe:
 					pr.becomeReplicate()
 				case pr.State == ProgressStateSnapshot && pr.needSnapshotAbort():
-					r.logger.Debugf("%x snapshot aborted, resumed sending replication messages to %x [%s]", r.id, m.From, pr)
+					if debugLoggingEnabled(r.logger) {
+						r.logger.Debugf("%x snapshot aborted, resumed sending replication messages to %x [%s]", r.id, m.From, pr)
+					}
 					// Transition back to replicating state via probing state
 					// (which takes the snapshot into account). If we didn't
 					// move to replicating state, that would only happen with
@@ -1152,11 +1174,15 @@ func stepLeader(r *raft, m pb.Message) error {
 		}
 		if !m.Reject {
 			pr.becomeProbe()
-			r.logger.Debugf("%x snapshot succeeded, resumed sending replication messages to %x [%s]", r.id, m.From, pr)
+			if debugLoggingEnabled(r.logger) {
+				r.logger.Debugf("%x snapshot succeeded, resumed sending replication messages to %x [%s]", r.id, m.From, pr)
+			}
 		} else {
 			pr.snapshotFailure()
 			pr.becomeProbe()
-			r.logger.Debugf("%x snapshot failed, resumed sending replication messages to %x [%s]", r.id, m.From, pr)
+			if debugLoggingEnabled(r.logger) {
+				r.logger.Debugf("%x snapshot failed, resumed sending replication messages to %x [%s]", r.id, m.From, pr)
+			}
 		}
 		// If snapshot finish, wait for the msgAppResp from the remote node before sending
 		// out the next msgApp.
@@ -1168,10 +1194,14 @@ func stepLeader(r *raft, m pb.Message) error {
 		if pr.State == ProgressStateReplicate {
 			pr.becomeProbe()
 		}
-		r.logger.Debugf("%x failed to send message to %x because it is unreachable [%s]", r.id, m.From, pr)
+		if debugLoggingEnabled(r.logger) {
+			r.logger.Debugf("%x failed to send message to %x because it is unreachable [%s]", r.id, m.From, pr)
+		}
 	case pb.MsgTransferLeader:
 		if pr.IsLearner {
-			r.logger.Debugf("%x is learner. Ignored transferring leadership", r.id)
+			if debugLoggingEnabled(r.logger) {
+				r.logger.Debugf("%x is learner. Ignored transferring leadership", r.id)
+			}
 			return nil
 		}
 		leadTransferee := m.From
@@ -1186,7 +1216,9 @@ func stepLeader(r *raft, m pb.Message) error {
 			r.logger.Infof("%x [term %d] abort previous transferring leadership to %x", r.id, r.Term, lastLeadTransferee)
 		}
 		if leadTransferee == r.id {
-			r.logger.Debugf("%x is already leader. Ignored transferring leadership to self", r.id)
+			if debugLoggingEnabled(r.logger) {
+				r.logger.Debugf("%x is already leader. Ignored transferring leadership to self", r.id)
+			}
 			return nil
 		}
 		// Transfer leadership to third party.
@@ -1246,7 +1278,9 @@ func stepCandidate(r *raft, m pb.Message) error {
 			r.becomeFollower(r.Term, None)
 		}
 	case pb.MsgTimeoutNow:
-		r.logger.Debugf("%x [term %d state %v] ignored MsgTimeoutNow from %x", r.id, r.Term, r.state, m.From)
+		if debugLoggingEnabled(r.logger) {
+			r.logger.Debugf("%x [term %d state %v] ignored MsgTimeoutNow from %x", r.id, r.Term, r.state, m.From)
+		}
 	}
 	return nil
 }
@@ -1318,8 +1352,10 @@ func (r *raft) handleAppendEntries(m pb.Message) {
 	if mlastIndex, ok := r.raftLog.maybeAppend(m.Index, m.LogTerm, m.Commit, m.Entries...); ok {
 		r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: mlastIndex})
 	} else {
-		r.logger.Debugf("%x [logterm: %d, index: %d] rejected msgApp [logterm: %d, index: %d] from %x",
-			r.id, r.raftLog.zeroTermOnErrCompacted(r.raftLog.term(m.Index)), m.Index, m.LogTerm, m.Index, m.From)
+		if debugLoggingEnabled(r.logger) {
+			r.logger.Debugf("%x [logterm: %d, index: %d] rejected msgApp [logterm: %d, index: %d] from %x",
+				r.id, r.raftLog.zeroTermOnErrCompacted(r.raftLog.term(m.Index)), m.Index, m.LogTerm, m.Index, m.From)
+		}
 		r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: m.Index, Reject: true, RejectHint: r.raftLog.lastIndex()})
 	}
 }
